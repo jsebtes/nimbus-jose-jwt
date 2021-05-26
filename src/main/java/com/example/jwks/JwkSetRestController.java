@@ -8,6 +8,7 @@ import com.nimbusds.jose.crypto.factories.DefaultJWSSignerFactory;
 import com.nimbusds.jose.crypto.factories.DefaultJWSVerifierFactory;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.jwk.source.RemoteJWKSet;
 import com.nimbusds.jose.proc.*;
@@ -25,17 +26,20 @@ import java.net.URL;
 import java.text.ParseException;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @RestController
 public class JwkSetRestController {
+
+    private final Random random;
 
     private final JWKSet jwkSet;
 
     @Autowired
     public JwkSetRestController(JWKSet jwkSet) {
         this.jwkSet = jwkSet;
+        this.random = new Random();
     }
 
     @GetMapping("/jwks")
@@ -45,9 +49,19 @@ public class JwkSetRestController {
 
     @GetMapping(value = "/jwt"/*, produces = JWK.MIME_TYPE*/)
     public String jwt() throws JOSEException {
-        JWK jwk = this.jwkSet.getKeyByKeyId("keyID");
+        return buildAndSignJwt(getSigJwk());
+    }
 
-        return buildAndSignJwt(jwk);
+    private JWK getSigJwk() {
+        List<JWK> sigJwks = jwkSet.getKeys().stream()
+                .filter(jwk -> jwk.getKeyUse() == null || jwk.getKeyUse().equals(KeyUse.SIGNATURE))
+                .collect(Collectors.toList());
+        if (sigJwks.size() == 1) {
+            return sigJwks.get(0);
+        }
+        else {
+            return sigJwks.get(random.nextInt(sigJwks.size()));
+        }
     }
 
     private String buildAndSignJwt(JWK jwk) throws JOSEException {
@@ -80,18 +94,18 @@ public class JwkSetRestController {
 
     @GetMapping(value = "/test")
     public String test() throws JOSEException, ParseException {
-        JWK jwk = this.jwkSet.getKeyByKeyId("keyID");
+        JWK jwk = getSigJwk();
         String jwt = buildAndSignJwt(jwk);
 
         JWSHeader header = new JWSHeader.Builder(JWSAlgorithm.parse(jwk.getAlgorithm().getName())).build();
 
-        return Boolean.valueOf(SignedJWT.parse(jwt).verify(new DefaultJWSVerifierFactory().createJWSVerifier(header, jwk.toRSAKey().toPublicKey()))).toString();
+        return Boolean.valueOf(SignedJWT.parse(jwt)
+                .verify(new DefaultJWSVerifierFactory().createJWSVerifier(header, jwk.toRSAKey().toPublicKey()))).toString();
     }
 
     @GetMapping(value = "/test2")
     public String test2() throws JOSEException, ParseException, MalformedURLException, BadJOSEException {
-        JWK jwk = this.jwkSet.getKeyByKeyId("keyID");
-        String jwt = buildAndSignJwt(jwk);
+        String jwt = buildAndSignJwt(getSigJwk());
 
 
 // Create a JWT processor for the access tokens
@@ -119,7 +133,7 @@ public class JwkSetRestController {
 // Set the required JWT claims for access tokens issued by the Connect2id
 // server, may differ with other servers
         jwtProcessor.setJWTClaimsSetVerifier(new DefaultJWTClaimsVerifier<>(
-                new JWTClaimsSet.Builder().issuer("me").build(),
+                new JWTClaimsSet.Builder().issuer("https://www.me.com").build(),
                 new HashSet<>(Arrays.asList("sub", "exp", "aud"))));
 
 // Process the token
